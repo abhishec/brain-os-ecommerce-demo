@@ -1,0 +1,16 @@
+{
+  "name": "nexus-commerce-demo",
+  "version": "1.0.0",
+  "description": "Demo e-commerce app with hardcoded business logic",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
