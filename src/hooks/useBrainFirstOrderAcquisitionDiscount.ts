@@ -1,89 +1,80 @@
 import { useState, useEffect } from 'react';
 
+interface FirstOrderDiscountResult {
+  discount: number;
+  source: 'brain' | 'fallback';
+}
+
 interface Customer {
   order_count: number;
 }
 
-interface DiscountResult {
-  discount: number;
-  source: 'brain' | 'fallback';
-  loading: boolean;
-  error: string | null;
-}
-
-export function useBrainFirstOrderAcquisitionDiscount(
+export const useBrainFirstOrderAcquisitionDiscount = (
   customer: Customer,
   fallback: number = 0.10
-): DiscountResult {
-  const [discount, setDiscount] = useState<number>(fallback);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+): FirstOrderDiscountResult => {
+  const [result, setResult] = useState<FirstOrderDiscountResult>({
+    discount: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateDiscount() {
+    const evaluateDiscount = async () => {
       try {
-        setLoading(true);
-        setError(null);
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-        const response = await fetch('/api/brain/evaluate', {
+        const context = {
+          customer: {
+            order_count: customer.order_count
+          }
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'pricing',
-            ruleName: 'first_order_acquisition_discount',
-            context: {
-              customer: {
-                order_count: customer.order_count
-              }
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (isMounted) {
-          if (result.success && typeof result.value === 'number') {
-            setDiscount(result.value);
-            setSource('brain');
-          } else {
-            setDiscount(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data.value === 'number') {
+          setResult({
+            discount: data.value,
+            source: 'brain'
+          });
+        } else {
+          // No match found, use fallback
+          setResult({
+            discount: fallback,
+            source: 'fallback'
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-          setDiscount(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          discount: fallback,
+          source: 'fallback'
+        });
       }
-    }
+    };
 
     evaluateDiscount();
-
-    return () => {
-      isMounted = false;
-    };
   }, [customer.order_count, fallback]);
 
-  return {
-    discount,
-    source,
-    loading,
-    error
-  };
-}
+  return result;
+};
