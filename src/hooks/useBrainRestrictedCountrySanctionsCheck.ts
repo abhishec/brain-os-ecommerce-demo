@@ -1,54 +1,54 @@
 import { useState, useEffect } from 'react';
 
-type SanctionsCheckResult = {
+interface CountryCheckResult {
   reason: string;
   eligible: boolean;
   check_name: string;
-};
+}
 
-type SanctionsCheckResponse = {
-  result: SanctionsCheckResult | null;
+interface BrainResult {
+  result: CountryCheckResult | null;
   source: 'brain' | 'fallback';
   loading: boolean;
-  error: Error | null;
-};
+  error: string | null;
+}
 
 export function useBrainRestrictedCountrySanctionsCheck(
   userCountry: string,
-  fallback: SanctionsCheckResult | null
-): SanctionsCheckResponse {
-  const [result, setResult] = useState<SanctionsCheckResult | null>(fallback);
+  fallback: CountryCheckResult | null
+): BrainResult {
+  const [result, setResult] = useState<CountryCheckResult | null>(fallback);
   const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    if (!userCountry) {
+      setResult(fallback);
+      setSource('fallback');
+      return;
+    }
 
-    const evaluateRule = async () => {
-      if (!userCountry) {
-        setResult(fallback);
-        setSource('fallback');
-        return;
-      }
-
+    const fetchBrainResult = async () => {
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'restricted_country_sanctions_check',
-            context: {
-              user: {
-                country: userCountry
-              }
-            },
+            context: { user: { country: userCountry } },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -59,39 +59,25 @@ export function useBrainRestrictedCountrySanctionsCheck(
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.result !== undefined) {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            setResult(fallback);
-            setSource('fallback');
-          }
-        }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
+        if (data && data.result !== undefined) {
+          setResult(data.result);
+          setSource('brain');
+        } else {
           setResult(fallback);
           setSource('fallback');
         }
+      } catch (err) {
+        console.warn('Brain API failed, using fallback:', err);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setResult(fallback);
+        setSource('fallback');
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     };
 
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
-    };
+    fetchBrainResult();
   }, [userCountry, fallback]);
 
-  return {
-    result,
-    source,
-    loading,
-    error
-  };
+  return { result, source, loading, error };
 }
