@@ -1,40 +1,41 @@
 import { useState, useEffect } from 'react';
 
-interface UseBrainMaximumTotalDiscountLimitResult {
-  isAllowed: boolean;
+interface MaximumTotalDiscountLimitResult {
+  maxTotalDiscount: number;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: string | null;
 }
 
-export function useBrainMaximumTotalDiscountLimit(
-  totalDiscountPercentage: number,
-  fallback: boolean = true
-): UseBrainMaximumTotalDiscountLimitResult {
-  const [result, setResult] = useState<boolean>(fallback);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface MaximumTotalDiscountLimitContext {
+  total_discount_percentage?: number;
+}
+
+export const useBrainMaximumTotalDiscountLimit = (
+  context: MaximumTotalDiscountLimitContext = {},
+  fallback: number = 0.40
+): MaximumTotalDiscountLimitResult => {
+  const [result, setResult] = useState<MaximumTotalDiscountLimitResult>({
+    maxTotalDiscount: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateRule() {
+    const evaluateRule = async () => {
       try {
-        setLoading(true);
-        setError(null);
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'limits',
-            ruleName: 'maximum_total_discount_limit',
-            context: {
-              total_discount_percentage: totalDiscountPercentage
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -45,39 +46,28 @@ export function useBrainMaximumTotalDiscountLimit(
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.success && data.result !== undefined) {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            setResult(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data.maxTotalDiscount === 'number') {
+          setResult({
+            maxTotalDiscount: data.maxTotalDiscount,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            maxTotalDiscount: fallback,
+            source: 'fallback'
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-          setResult(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          maxTotalDiscount: fallback,
+          source: 'fallback'
+        });
       }
-    }
+    };
 
     evaluateRule();
+  }, [context.total_discount_percentage, fallback]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [totalDiscountPercentage, fallback]);
-
-  return {
-    isAllowed: result,
-    source,
-    loading,
-    error
-  };
-}
+  return result;
+};
