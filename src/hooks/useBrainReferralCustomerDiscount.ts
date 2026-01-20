@@ -1,55 +1,51 @@
 import { useState, useEffect } from 'react';
 
-interface UseBrainReferralCustomerDiscountResult {
+interface ReferralDiscountResult {
   discount: number;
-  loading: boolean;
-  error: string | null;
   source: 'brain' | 'fallback';
 }
 
-interface UseBrainReferralCustomerDiscountParams {
-  customer: {
-    referral_status: string;
-    [key: string]: any;
-  };
-  fallback: number;
+interface Customer {
+  referral_status?: string;
+  [key: string]: any;
 }
 
-export function useBrainReferralCustomerDiscount({
-  customer,
-  fallback
-}: UseBrainReferralCustomerDiscountParams): UseBrainReferralCustomerDiscountResult {
-  const [discount, setDiscount] = useState<number>(fallback);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+export function useBrainReferralCustomerDiscount(
+  customer: Customer,
+  fallback: number = 0.15
+): ReferralDiscountResult {
+  const [result, setResult] = useState<ReferralDiscountResult>({
+    discount: fallback,
+    source: 'fallback'
+  });
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateRule() {
+    const evaluateDiscount = async () => {
       if (!customer) {
-        setDiscount(fallback);
-        setSource('fallback');
+        setResult({ discount: fallback, source: 'fallback' });
         return;
       }
 
-      setLoading(true);
-      setError(null);
-
+      setIsLoading(true);
+      
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+        
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'pricing',
-            rule: 'referral_customer_discount',
-            context: {
-              customer
-            },
-            fallback
+          body: JSON.stringify({ 
+            domain: 'pricing', 
+            context: { customer }, 
+            transformer_id: TRANSFORMER_ID,
+            fallback 
           }),
         });
 
@@ -57,41 +53,32 @@ export function useBrainReferralCustomerDiscount({
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (isMounted) {
-          if (result.success && typeof result.value === 'number') {
-            setDiscount(result.value);
-            setSource('brain');
-          } else {
-            setDiscount(fallback);
-            setSource('fallback');
-          }
+        if (data.success && typeof data.result === 'number') {
+          setResult({ 
+            discount: data.result, 
+            source: 'brain' 
+          });
+        } else {
+          setResult({ 
+            discount: fallback, 
+            source: 'fallback' 
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-          setDiscount(fallback);
-          setSource('fallback');
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({ 
+          discount: fallback, 
+          source: 'fallback' 
+        });
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setIsLoading(false);
       }
-    }
-
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
     };
-  }, [customer?.referral_status, fallback]);
 
-  return {
-    discount,
-    loading,
-    error,
-    source
-  };
+    evaluateDiscount();
+  }, [customer, fallback]);
+
+  return { ...result, isLoading };
 }
