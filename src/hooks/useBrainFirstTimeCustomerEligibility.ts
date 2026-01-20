@@ -5,49 +5,56 @@ interface FirstTimeCustomerResult {
   discount: {
     name: string;
     type: string;
-    amount: number;
+    amount: string;
   };
   eligible: boolean;
 }
 
-interface UseBrainFirstTimeCustomerEligibilityResult {
+interface EvaluationResult {
   result: FirstTimeCustomerResult | null;
-  loading: boolean;
-  error: Error | null;
   source: 'brain' | 'fallback';
 }
 
-interface Context {
+interface CustomerContext {
   isFirstOrder?: boolean;
   orderCount?: number;
+  [key: string]: any;
 }
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
 export function useBrainFirstTimeCustomerEligibility(
-  context: Context,
+  context: CustomerContext,
   fallback: FirstTimeCustomerResult | null
-): UseBrainFirstTimeCustomerEligibilityResult {
-  const [result, setResult] = useState<FirstTimeCustomerResult | null>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+): EvaluationResult {
+  const [result, setResult] = useState<EvaluationResult>({
+    result: fallback,
+    source: 'fallback'
+  });
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     let isCancelled = false;
 
-    async function evaluateRule() {
-      setLoading(true);
-      setError(null);
+    async function evaluateEligibility() {
+      if (!context || isLoading) return;
+
+      setIsLoading(true);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'first_time_customer_eligibility',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -57,40 +64,41 @@ export function useBrainFirstTimeCustomerEligibility(
         }
 
         const data = await response.json();
-
+        
         if (!isCancelled) {
-          if (data.result !== undefined) {
-            setResult(data.result);
-            setSource('brain');
+          if (data.result !== null && data.result !== undefined) {
+            setResult({
+              result: data.result,
+              source: 'brain'
+            });
           } else {
-            setResult(fallback);
-            setSource('fallback');
+            setResult({
+              result: fallback,
+              source: 'fallback'
+            });
           }
         }
-      } catch (err) {
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
         if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setResult(fallback);
-          setSource('fallback');
+          setResult({
+            result: fallback,
+            source: 'fallback'
+          });
         }
       } finally {
         if (!isCancelled) {
-          setLoading(false);
+          setIsLoading(false);
         }
       }
     }
 
-    evaluateRule();
+    evaluateEligibility();
 
     return () => {
       isCancelled = true;
     };
   }, [context.isFirstOrder, context.orderCount, fallback]);
 
-  return {
-    result,
-    loading,
-    error,
-    source
-  };
+  return result;
 }
