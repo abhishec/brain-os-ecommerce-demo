@@ -3,53 +3,47 @@ import { useState, useEffect } from 'react';
 interface MembershipDurationResult {
   memberMonths: number;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: Error | null;
 }
 
 interface Customer {
-  memberSince?: Date;
+  memberSince: Date;
+  [key: string]: any;
 }
 
-export function useBrainCalculateMembershipDurationMonths(
+const useBrainCalculateMembershipDurationMonths = (
   customer: Customer,
   fallback: number
-): MembershipDurationResult {
+): MembershipDurationResult => {
   const [result, setResult] = useState<MembershipDurationResult>({
     memberMonths: fallback,
-    source: 'fallback',
-    loading: false,
-    error: null
+    source: 'fallback'
   });
 
   useEffect(() => {
-    // If customer.memberSince doesn't exist, return fallback immediately
-    if (!customer.memberSince) {
-      setResult({
-        memberMonths: fallback,
-        source: 'fallback',
-        loading: false,
-        error: null
-      });
-      return;
-    }
-
-    setResult(prev => ({ ...prev, loading: true, error: null }));
-
     const evaluateRule = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const context = {
+          customer: {
+            memberSince: customer.memberSince?.toISOString?.() || customer.memberSince,
+            ...customer
+          }
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'calculation',
-            ruleName: 'calculate_membership_duration_months',
-            context: {
-              customer,
-              now: () => Date.now()
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -60,35 +54,37 @@ export function useBrainCalculateMembershipDurationMonths(
 
         const data = await response.json();
         
-        if (data.success && typeof data.result?.memberMonths === 'number') {
+        if (data?.result?.memberMonths !== undefined) {
           setResult({
             memberMonths: data.result.memberMonths,
-            source: 'brain',
-            loading: false,
-            error: null
+            source: 'brain'
           });
         } else {
-          // No match or invalid result, use fallback
           setResult({
             memberMonths: fallback,
-            source: 'fallback',
-            loading: false,
-            error: null
+            source: 'fallback'
           });
         }
       } catch (error) {
-        // Always return fallback on error - ZERO-IMPACT guarantee
+        console.warn('Brain evaluation failed, using fallback:', error);
         setResult({
           memberMonths: fallback,
-          source: 'fallback',
-          loading: false,
-          error: error instanceof Error ? error : new Error('Unknown error')
+          source: 'fallback'
         });
       }
     };
 
-    evaluateRule();
-  }, [customer.memberSince, fallback]);
+    if (customer?.memberSince) {
+      evaluateRule();
+    } else {
+      setResult({
+        memberMonths: fallback,
+        source: 'fallback'
+      });
+    }
+  }, [customer, fallback]);
 
   return result;
-}
+};
+
+export default useBrainCalculateMembershipDurationMonths;
