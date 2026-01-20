@@ -1,44 +1,50 @@
 import { useState, useEffect } from 'react';
 
 interface PaymentFailurePenaltyScoringResult {
-  value: number;
+  failedPaymentPenalty: number;
+  disputePenalty: number;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: Error | null;
 }
 
 interface PaymentFailurePenaltyScoringContext {
-  event_type: 'payment_failure' | 'dispute';
+  event_type?: string;
+  [key: string]: any;
 }
 
-export function useBrainPaymentFailurePenaltyScoring(
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export const useBrainPaymentFailurePenaltyScoring = (
   context: PaymentFailurePenaltyScoringContext,
-  fallback: number
-): PaymentFailurePenaltyScoringResult {
-  const [result, setResult] = useState<PaymentFailurePenaltyScoringResult>({
-    value: fallback,
-    source: 'fallback',
-    loading: false,
-    error: null
-  });
+  fallback: PaymentFailurePenaltyScoringResult = {
+    failedPaymentPenalty: 30,
+    disputePenalty: 25,
+    source: 'fallback'
+  }
+) => {
+  const [result, setResult] = useState<PaymentFailurePenaltyScoringResult>(fallback);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-
     const evaluateRule = async () => {
-      setResult(prev => ({ ...prev, loading: true, error: null }));
-
+      setLoading(true);
+      setError(null);
+      
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'risk',
-            ruleName: 'payment_failure_penalty_scoring',
-            context,
-            fallback
+          body: JSON.stringify({ 
+            domain: 'risk', 
+            context, 
+            transformer_id: TRANSFORMER_ID,
+            fallback 
           }),
         });
 
@@ -48,43 +54,35 @@ export function useBrainPaymentFailurePenaltyScoring(
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.success && typeof data.result === 'number') {
-            setResult({
-              value: data.result,
-              source: 'brain',
-              loading: false,
-              error: null
-            });
-          } else {
-            // No match or invalid result - use fallback
-            setResult({
-              value: fallback,
-              source: 'fallback',
-              loading: false,
-              error: null
-            });
+        if (data && typeof data === 'object') {
+          // Handle the conditional logic result from the brain
+          let failedPaymentPenalty = fallback.failedPaymentPenalty;
+          let disputePenalty = fallback.disputePenalty;
+          
+          if (context.event_type === 'payment_failure') {
+            failedPaymentPenalty = data.value || data.result || 30;
+          } else if (context.event_type === 'dispute') {
+            disputePenalty = data.value || data.result || 25;
           }
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          // Always use fallback on error - zero impact guarantee
+          
           setResult({
-            value: fallback,
-            source: 'fallback',
-            loading: false,
-            error: error instanceof Error ? error : new Error('Unknown error')
+            failedPaymentPenalty,
+            disputePenalty,
+            source: 'brain'
           });
+        } else {
+          setResult(fallback);
         }
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Unknown error'));
+        setResult(fallback);
+      } finally {
+        setLoading(false);
       }
     };
 
     evaluateRule();
+  }, [context.event_type]);
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [context.event_type, fallback]);
-
-  return result;
-}
+  return { ...result, loading, error };
+};
