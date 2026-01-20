@@ -1,43 +1,42 @@
 import { useState, useEffect } from 'react';
 
-interface FreeShippingResult {
+interface ShippingConfig {
   method: string;
   threshold: number;
   freeShipping: boolean;
-  source: 'brain' | 'fallback';
 }
 
-interface UseBrainFreeShippingThresholdParams {
+interface BrainResult {
+  data: ShippingConfig;
+  source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
+}
+
+interface ShippingContext {
   orderTotal: number;
   isExpedited: boolean;
-  fallback: Omit<FreeShippingResult, 'source'>;
 }
 
-export function useBrainFreeShippingThreshold({
-  orderTotal,
-  isExpedited,
-  fallback
-}: UseBrainFreeShippingThresholdParams): FreeShippingResult {
-  const [result, setResult] = useState<FreeShippingResult>({
-    ...fallback,
-    source: 'fallback'
-  });
-  const [isLoading, setIsLoading] = useState(false);
+export function useBrainFreeShippingThreshold(
+  context: ShippingContext,
+  fallback: ShippingConfig
+): BrainResult {
+  const [data, setData] = useState<ShippingConfig>(fallback);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const evaluateRule = async () => {
-      setIsLoading(true);
-      
+    const fetchBrainLogic = async () => {
       try {
+        setLoading(true);
+        setError(null);
+
         const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
         const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
         const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
-        
-        const context = {
-          orderTotal,
-          isExpedited
-        };
-        
+
         const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
@@ -45,47 +44,39 @@ export function useBrainFreeShippingThreshold({
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({ 
-            domain: 'shipping', 
-            context, 
+          body: JSON.stringify({
+            domain: 'shipping',
+            context,
             transformer_id: TRANSFORMER_ID,
-            fallback 
+            fallback
           }),
         });
-        
+
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
+
+        const result = await response.json();
         
-        const data = await response.json();
-        
-        if (data && data.method && typeof data.threshold === 'number' && typeof data.freeShipping === 'boolean') {
-          setResult({
-            method: data.method,
-            threshold: data.threshold,
-            freeShipping: data.freeShipping,
-            source: 'brain'
-          });
+        if (result && result.data) {
+          setData(result.data);
+          setSource('brain');
         } else {
-          // No valid brain result, use fallback
-          setResult({
-            ...fallback,
-            source: 'fallback'
-          });
+          setData(fallback);
+          setSource('fallback');
         }
-      } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        setResult({
-          ...fallback,
-          source: 'fallback'
-        });
+      } catch (err) {
+        console.warn('Brain API failed, using fallback:', err);
+        setData(fallback);
+        setSource('fallback');
+        setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     };
 
-    evaluateRule();
-  }, [orderTotal, isExpedited, fallback]);
+    fetchBrainLogic();
+  }, [context.orderTotal, context.isExpedited, fallback]);
 
-  return result;
+  return { data, source, loading, error };
 }
