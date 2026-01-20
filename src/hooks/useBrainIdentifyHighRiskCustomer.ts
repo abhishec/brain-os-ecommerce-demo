@@ -6,39 +6,57 @@ interface CustomerProfile {
   disputeCount: number;
 }
 
-interface UseBrainIdentifyHighRiskCustomerResult {
+interface HighRiskResult {
   isHighRisk: boolean;
-  loading: boolean;
-  error: string | null;
   source: 'brain' | 'fallback';
 }
 
-export function useBrainIdentifyHighRiskCustomer(
-  profile: CustomerProfile,
-  fallback: boolean
-): UseBrainIdentifyHighRiskCustomerResult {
-  const [result, setResult] = useState<boolean>(fallback);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+interface UseBrainIdentifyHighRiskCustomerParams {
+  profile: CustomerProfile;
+  fallback: boolean;
+  HIGH_RISK_DAYS_OVERDUE?: number;
+  MAX_FAILED_PAYMENTS?: number;
+}
+
+export function useBrainIdentifyHighRiskCustomer({
+  profile,
+  fallback,
+  HIGH_RISK_DAYS_OVERDUE = 30,
+  MAX_FAILED_PAYMENTS = 3
+}: UseBrainIdentifyHighRiskCustomerParams): HighRiskResult {
+  const [result, setResult] = useState<HighRiskResult>({
+    isHighRisk: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
     const evaluateRisk = async () => {
-      setLoading(true);
-      setError(null);
-      
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const context = {
+          profile: {
+            daysOverdue: profile.daysOverdue,
+            failedPayments: profile.failedPayments,
+            disputeCount: profile.disputeCount,
+            HIGH_RISK_DAYS_OVERDUE,
+            MAX_FAILED_PAYMENTS
+          }
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'identify_high_risk_customer',
-            context: {
-              profile
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -49,29 +67,28 @@ export function useBrainIdentifyHighRiskCustomer(
 
         const data = await response.json();
         
-        if (data.success && data.result !== undefined) {
-          setResult(data.result);
-          setSource('brain');
+        if (data && typeof data.result === 'boolean') {
+          setResult({
+            isHighRisk: data.result,
+            source: 'brain'
+          });
         } else {
-          setResult(fallback);
-          setSource('fallback');
+          setResult({
+            isHighRisk: fallback,
+            source: 'fallback'
+          });
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-        setResult(fallback);
-        setSource('fallback');
-      } finally {
-        setLoading(false);
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          isHighRisk: fallback,
+          source: 'fallback'
+        });
       }
     };
 
     evaluateRisk();
-  }, [profile.daysOverdue, profile.failedPayments, profile.disputeCount, fallback]);
+  }, [profile.daysOverdue, profile.failedPayments, profile.disputeCount, fallback, HIGH_RISK_DAYS_OVERDUE, MAX_FAILED_PAYMENTS]);
 
-  return {
-    isHighRisk: result,
-    loading,
-    error,
-    source
-  };
+  return result;
 }
