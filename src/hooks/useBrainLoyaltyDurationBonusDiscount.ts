@@ -1,52 +1,43 @@
 import { useState, useEffect } from 'react';
 
 interface LoyaltyDurationBonus {
-  24: number;
-  12: number;
-  6: number;
+  [key: number]: number;
 }
 
-interface UseBrainLoyaltyDurationBonusDiscountResult {
-  data: LoyaltyDurationBonus;
-  loading: boolean;
-  error: Error | null;
+interface BrainResult {
+  value: LoyaltyDurationBonus;
   source: 'brain' | 'fallback';
 }
 
-interface CustomerContext {
-  customer?: {
-    membership_duration_months?: number;
-    [key: string]: any;
-  };
-  [key: string]: any;
-}
-
-export function useBrainLoyaltyDurationBonusDiscount(
-  fallback: LoyaltyDurationBonus,
-  context: CustomerContext = {}
-): UseBrainLoyaltyDurationBonusDiscountResult {
-  const [data, setData] = useState<LoyaltyDurationBonus>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+export const useBrainLoyaltyDurationBonusDiscount = (
+  fallback: LoyaltyDurationBonus
+): BrainResult => {
+  const [result, setResult] = useState<BrainResult>({
+    value: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let mounted = true;
-
     const evaluateRule = async () => {
       try {
-        setLoading(true);
-        setError(null);
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'pricing',
-            rule: 'loyalty_duration_bonus_discount',
-            context,
+            context: {
+              rule: 'loyalty_duration_bonus_discount',
+              type: 'lookup_table'
+            },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -55,41 +46,30 @@ export function useBrainLoyaltyDurationBonusDiscount(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (mounted) {
-          if (result.success && result.data !== undefined) {
-            setData(result.data);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+          setResult({
+            value: data,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            value: fallback,
+            source: 'fallback'
+          });
         }
-      } catch (err) {
-        if (mounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          value: fallback,
+          source: 'fallback'
+        });
       }
     };
 
     evaluateRule();
+  }, [fallback]);
 
-    return () => {
-      mounted = false;
-    };
-  }, [JSON.stringify(context), JSON.stringify(fallback)]);
-
-  return {
-    data,
-    loading,
-    error,
-    source
-  };
-}
+  return result;
+};
