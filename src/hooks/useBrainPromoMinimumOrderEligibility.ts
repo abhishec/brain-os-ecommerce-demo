@@ -1,59 +1,79 @@
 import { useState, useEffect } from 'react';
 
+interface PromoDiscount {
+  name: string;
+  type: 'percentage';
+  amount: number;
+}
+
 interface PromoEligibilityResult {
-  discount?: {
-    name: string;
-    type: string;
-    amount: number;
-  };
+  discount?: PromoDiscount;
   eligible: boolean;
 }
 
-interface PromoEligibilityResponse extends PromoEligibilityResult {
+interface UseBrainPromoMinimumOrderEligibilityParams {
+  cartTotal: number;
+  promoCode: string;
+  promo: {
+    minOrder: number;
+    discount: number;
+  };
+  fallback: PromoEligibilityResult;
+}
+
+interface UseBrainPromoMinimumOrderEligibilityReturn {
+  result: PromoEligibilityResult;
+  loading: boolean;
+  error: string | null;
   source: 'brain' | 'fallback';
 }
 
-interface PromoEligibilityContext {
-  cartTotal: number;
-  promoCode: string;
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-interface PromoEligibilityFallback {
-  discount?: {
-    name: string;
-    type: string;
-    amount: number;
-  };
-  eligible: boolean;
-}
-
-export function useBrainPromoMinimumOrderEligibility(
-  context: PromoEligibilityContext,
-  fallback: PromoEligibilityFallback
-): PromoEligibilityResponse {
-  const [result, setResult] = useState<PromoEligibilityResponse>({
-    ...fallback,
-    source: 'fallback'
-  });
-  const [isLoading, setIsLoading] = useState(false);
+export const useBrainPromoMinimumOrderEligibility = ({
+  cartTotal,
+  promoCode,
+  promo,
+  fallback
+}: UseBrainPromoMinimumOrderEligibilityParams): UseBrainPromoMinimumOrderEligibilityReturn => {
+  const [result, setResult] = useState<PromoEligibilityResult>(fallback);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
 
   useEffect(() => {
-    let isCancelled = false;
+    const evaluateEligibility = async () => {
+      if (!cartTotal || !promoCode || !promo) {
+        setResult(fallback);
+        setSource('fallback');
+        return;
+      }
 
-    async function evaluateRule() {
-      setIsLoading(true);
-      
+      setLoading(true);
+      setError(null);
+
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const domain = 'eligibility';
+        const context = {
+          cartTotal,
+          promoCode,
+          promo
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'eligibility',
-            rule: 'promo_minimum_order_eligibility',
-            context,
-            fallback
+          body: JSON.stringify({ 
+            domain, 
+            context, 
+            transformer_id: TRANSFORMER_ID,
+            fallback 
           }),
         });
 
@@ -63,40 +83,25 @@ export function useBrainPromoMinimumOrderEligibility(
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.result !== undefined && data.result !== null) {
-            setResult({
-              ...data.result,
-              source: 'brain'
-            });
-          } else {
-            setResult({
-              ...fallback,
-              source: 'fallback'
-            });
-          }
+        if (data && typeof data === 'object' && 'eligible' in data) {
+          setResult(data);
+          setSource('brain');
+        } else {
+          setResult(fallback);
+          setSource('fallback');
         }
-      } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        if (!isCancelled) {
-          setResult({
-            ...fallback,
-            source: 'fallback'
-          });
-        }
+      } catch (err) {
+        console.warn('Brain evaluation failed, using fallback:', err);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setResult(fallback);
+        setSource('fallback');
       } finally {
-        if (!isCancelled) {
-          setIsLoading(false);
-        }
+        setLoading(false);
       }
-    }
-
-    evaluateRule();
-
-    return () => {
-      isCancelled = true;
     };
-  }, [context.cartTotal, context.promoCode, fallback]);
 
-  return result;
-}
+    evaluateEligibility();
+  }, [cartTotal, promoCode, promo?.minOrder, promo?.discount, fallback]);
+
+  return { result, loading, error, source };
+};
