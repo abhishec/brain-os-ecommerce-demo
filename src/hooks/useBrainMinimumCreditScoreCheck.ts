@@ -6,52 +6,40 @@ interface CreditCheckResult {
   message: string;
 }
 
-interface UseBrainMinimumCreditScoreCheckResult {
-  result: CreditCheckResult | null;
-  loading: boolean;
-  error: Error | null;
+interface BrainCreditCheckResponse {
+  result: CreditCheckResult;
   source: 'brain' | 'fallback';
 }
 
-interface UseBrainMinimumCreditScoreCheckParams {
-  creditScore: number;
-  fallback: CreditCheckResult | null;
-  enabled?: boolean;
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainMinimumCreditScoreCheck({
-  creditScore,
-  fallback,
-  enabled = true
-}: UseBrainMinimumCreditScoreCheckParams): UseBrainMinimumCreditScoreCheckResult {
-  const [result, setResult] = useState<CreditCheckResult | null>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+export function useBrainMinimumCreditScoreCheck(
+  creditScore: number,
+  fallback: CreditCheckResult
+): BrainCreditCheckResponse {
+  const [result, setResult] = useState<BrainCreditCheckResponse>({
+    result: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    if (!enabled) {
-      setResult(fallback);
-      setSource('fallback');
-      return;
-    }
-
-    let isMounted = true;
+    let isCancelled = false;
 
     async function evaluateRule() {
       try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'minimum_credit_score_check',
             context: { creditScore },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -62,26 +50,26 @@ export function useBrainMinimumCreditScoreCheck({
 
         const data = await response.json();
         
-        if (isMounted) {
-          // If brain returns a result, use it; otherwise use fallback
-          if (data.result !== undefined && data.result !== null) {
-            setResult(data.result);
-            setSource('brain');
+        if (!isCancelled) {
+          if (data?.result) {
+            setResult({
+              result: data.result,
+              source: 'brain'
+            });
           } else {
-            setResult(fallback);
-            setSource('fallback');
+            setResult({
+              result: fallback,
+              source: 'fallback'
+            });
           }
         }
-      } catch (err) {
-        console.warn('Brain evaluation failed, using fallback:', err);
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setResult(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        if (!isCancelled) {
+          setResult({
+            result: fallback,
+            source: 'fallback'
+          });
         }
       }
     }
@@ -89,9 +77,9 @@ export function useBrainMinimumCreditScoreCheck({
     evaluateRule();
 
     return () => {
-      isMounted = false;
+      isCancelled = true;
     };
-  }, [creditScore, fallback, enabled]);
+  }, [creditScore, fallback]);
 
-  return { result, loading, error, source };
+  return result;
 }
