@@ -1,98 +1,78 @@
 import { useState, useEffect } from 'react';
 
-interface RiskFactors {
-  previousOrders: number;
-  [key: string]: any;
-}
-
-interface RiskAssessment {
-  score: number;
-  flags: string[];
-}
-
 interface OrderHistoryLoyaltyScoringResult {
   scoreAdjustment: number;
   flags: string[];
   source: 'brain' | 'fallback';
 }
 
-interface OrderHistoryLoyaltyScoringFallback {
-  scoreAdjustment: number;
-  flags: string[];
+interface OrderHistoryLoyaltyScoringInput {
+  factors: {
+    previousOrders: number;
+  };
 }
 
-export function useBrainOrderHistoryLoyaltyScoring(
-  factors: RiskFactors,
-  fallback: OrderHistoryLoyaltyScoringFallback
-): OrderHistoryLoyaltyScoringResult {
-  const [result, setResult] = useState<OrderHistoryLoyaltyScoringResult>({
-    ...fallback,
-    source: 'fallback'
-  });
-  const [isLoading, setIsLoading] = useState(false);
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export const useBrainOrderHistoryLoyaltyScoring = (
+  input: OrderHistoryLoyaltyScoringInput,
+  fallback: OrderHistoryLoyaltyScoringResult
+) => {
+  const [result, setResult] = useState<OrderHistoryLoyaltyScoringResult>(fallback);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-
     const evaluateRule = async () => {
-      setIsLoading(true);
-      
+      setLoading(true);
+      setError(null);
+
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'order_history_loyalty_scoring',
-            context: { factors },
+            context: {
+              rule: 'order_history_loyalty_scoring',
+              input
+            },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw new Error(`API request failed: ${response.status}`);
         }
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.success && data.result) {
-            setResult({
-              scoreAdjustment: data.result.scoreAdjustment ?? fallback.scoreAdjustment,
-              flags: data.result.flags ?? fallback.flags,
-              source: 'brain'
-            });
-          } else {
-            // No match or unsuccessful evaluation - use fallback
-            setResult({
-              ...fallback,
-              source: 'fallback'
-            });
-          }
-        }
-      } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        if (!isCancelled) {
+        if (data && typeof data.scoreAdjustment === 'number' && Array.isArray(data.flags)) {
           setResult({
-            ...fallback,
-            source: 'fallback'
+            scoreAdjustment: data.scoreAdjustment,
+            flags: data.flags,
+            source: 'brain'
           });
+        } else {
+          setResult({ ...fallback, source: 'fallback' });
         }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setResult({ ...fallback, source: 'fallback' });
       } finally {
-        if (!isCancelled) {
-          setIsLoading(false);
-        }
+        setLoading(false);
       }
     };
 
     evaluateRule();
+  }, [input.factors.previousOrders, fallback]);
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [factors.previousOrders, fallback]);
-
-  return result;
-}
+  return { result, loading, error };
+};
