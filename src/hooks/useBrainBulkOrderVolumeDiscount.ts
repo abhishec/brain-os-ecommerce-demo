@@ -3,84 +3,69 @@ import { useState, useEffect } from 'react';
 interface BulkOrderDiscountResult {
   discount: number;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error?: string;
 }
 
-interface BulkOrderContext {
+interface UseBrainBulkOrderVolumeDiscountParams {
   quantity: number;
+  fallback: number;
 }
 
-export function useBrainBulkOrderVolumeDiscount(
-  context: BulkOrderContext,
-  fallback: number = 0.15
-): BulkOrderDiscountResult {
+export const useBrainBulkOrderVolumeDiscount = ({ quantity, fallback }: UseBrainBulkOrderVolumeDiscountParams): BulkOrderDiscountResult => {
   const [result, setResult] = useState<BulkOrderDiscountResult>({
     discount: fallback,
-    source: 'fallback',
-    loading: false
+    source: 'fallback'
   });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const evaluateRule = async () => {
-      setResult(prev => ({ ...prev, loading: true }));
-
+    const evaluateDiscount = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'pricing',
-            ruleName: 'bulk_order_volume_discount',
-            context,
-            fallback
-          })
+          body: JSON.stringify({ 
+            domain: 'pricing', 
+            context: { quantity }, 
+            transformer_id: TRANSFORMER_ID,
+            fallback 
+          }),
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.success && data.result !== undefined) {
-            setResult({
-              discount: data.result,
-              source: 'brain',
-              loading: false
-            });
-          } else {
-            setResult({
-              discount: fallback,
-              source: 'fallback',
-              loading: false,
-              error: data.error || 'No matching rule found'
-            });
-          }
-        }
-      } catch (error) {
-        if (isMounted) {
+        if (data.result !== undefined && typeof data.result === 'number') {
+          setResult({
+            discount: data.result,
+            source: 'brain'
+          });
+        } else {
           setResult({
             discount: fallback,
-            source: 'fallback',
-            loading: false,
-            error: error instanceof Error ? error.message : 'Evaluation failed'
+            source: 'fallback'
           });
         }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          discount: fallback,
+          source: 'fallback'
+        });
       }
     };
 
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [context.quantity, fallback]);
+    evaluateDiscount();
+  }, [quantity, fallback]);
 
   return result;
-}
+};
