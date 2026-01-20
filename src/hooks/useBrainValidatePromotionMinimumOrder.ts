@@ -2,11 +2,7 @@ import { useState, useEffect } from 'react';
 
 interface ValidationResult {
   valid: boolean;
-  message?: string;
-}
-
-interface ValidationResultWithSource extends ValidationResult {
-  source: 'brain' | 'fallback';
+  message: string;
 }
 
 interface PromotionValidationContext {
@@ -16,32 +12,49 @@ interface PromotionValidationContext {
   };
 }
 
-export function useBrainValidatePromotionMinimumOrder(
+interface BrainResult {
+  result: ValidationResult | null;
+  source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
+}
+
+export const useBrainValidatePromotionMinimumOrder = (
   context: PromotionValidationContext,
   fallback: ValidationResult
-): ValidationResultWithSource {
-  const [result, setResult] = useState<ValidationResultWithSource>({
-    ...fallback,
-    source: 'fallback'
-  });
-  const [isLoading, setIsLoading] = useState(false);
+): BrainResult => {
+  const [result, setResult] = useState<ValidationResult>(fallback);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    const evaluateRule = async () => {
+      if (!context?.cart_total || !context?.promo?.min_order) {
+        setResult(fallback);
+        setSource('fallback');
+        return;
+      }
 
-    async function evaluateRule() {
-      setIsLoading(true);
-      
+      setLoading(true);
+      setError(null);
+
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'validation',
-            rule: 'validate_promotion_minimum_order',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -52,40 +65,25 @@ export function useBrainValidatePromotionMinimumOrder(
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.result !== undefined && data.result !== null) {
-            setResult({
-              ...data.result,
-              source: 'brain'
-            });
-          } else {
-            setResult({
-              ...fallback,
-              source: 'fallback'
-            });
-          }
+        if (data?.result) {
+          setResult(data.result);
+          setSource('brain');
+        } else {
+          setResult(fallback);
+          setSource('fallback');
         }
-      } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        if (isMounted) {
-          setResult({
-            ...fallback,
-            source: 'fallback'
-          });
-        }
+      } catch (err) {
+        console.warn('Brain evaluation failed, using fallback:', err);
+        setResult(fallback);
+        setSource('fallback');
+        setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        setLoading(false);
       }
-    }
+    };
 
     evaluateRule();
-
-    return () => {
-      isMounted = false;
-    };
   }, [context.cart_total, context.promo.min_order, fallback]);
 
-  return result;
-}
+  return { result, source, loading, error };
+};
