@@ -1,91 +1,74 @@
 import { useState, useEffect } from 'react';
 
-interface UseBrainLargeOrderAccountAgeVerificationParams {
-  orderTotal: number;
-  accountAgeDays: number;
-  fallback: boolean;
+interface VerificationContext {
+  order_total: number;
+  account_age_days: number;
 }
 
-interface UseBrainLargeOrderAccountAgeVerificationResult {
-  shouldVerify: boolean;
-  loading: boolean;
-  error: Error | null;
+interface VerificationResult {
+  requiresVerification: boolean;
   source: 'brain' | 'fallback';
 }
 
-export function useBrainLargeOrderAccountAgeVerification({
-  orderTotal,
-  accountAgeDays,
-  fallback
-}: UseBrainLargeOrderAccountAgeVerificationParams): UseBrainLargeOrderAccountAgeVerificationResult {
-  const [shouldVerify, setShouldVerify] = useState<boolean>(fallback);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+export function useBrainLargeOrderAccountAgeVerification(
+  context: VerificationContext,
+  fallback: boolean
+): VerificationResult {
+  const [result, setResult] = useState<VerificationResult>({
+    requiresVerification: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateRule() {
-      setLoading(true);
-      setError(null);
-
+    const evaluateRule = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'limits',
-            ruleName: 'large_order_account_age_verification',
-            context: {
-              order_total: orderTotal,
-              account_age_days: accountAgeDays
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`API request failed: ${response.status}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (isMounted) {
-          if (result.success && result.data !== undefined) {
-            setShouldVerify(result.data);
-            setSource('brain');
-          } else {
-            setShouldVerify(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data.requiresVerification === 'boolean') {
+          setResult({
+            requiresVerification: data.requiresVerification,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            requiresVerification: fallback,
+            source: 'fallback'
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setShouldVerify(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          requiresVerification: fallback,
+          source: 'fallback'
+        });
       }
-    }
+    };
 
     evaluateRule();
+  }, [context.order_total, context.account_age_days, fallback]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [orderTotal, accountAgeDays, fallback]);
-
-  return {
-    shouldVerify,
-    loading,
-    error,
-    source
-  };
+  return result;
 }
