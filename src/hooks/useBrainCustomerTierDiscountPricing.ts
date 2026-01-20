@@ -1,54 +1,49 @@
 import { useState, useEffect } from 'react';
 
-interface CustomerTierDiscount {
+interface CustomerTierDiscountResult {
   discount: number;
   breakdown: string;
 }
 
-interface UseBrainCustomerTierDiscountPricingResult {
-  discount: number;
-  breakdown: string;
+interface CustomerTierDiscountResponse {
+  result: CustomerTierDiscountResult;
   source: 'brain' | 'fallback';
-  isLoading: boolean;
-  error: Error | null;
 }
 
 interface Customer {
-  tier?: string;
-}
-
-interface Context {
-  customer: Customer;
+  tier: string;
 }
 
 export function useBrainCustomerTierDiscountPricing(
-  context: Context,
-  fallback: CustomerTierDiscount
-): UseBrainCustomerTierDiscountPricingResult {
-  const [result, setResult] = useState<CustomerTierDiscount & { source: 'brain' | 'fallback' }>({
-    ...fallback,
+  customer: Customer,
+  fallback: CustomerTierDiscountResult
+): CustomerTierDiscountResponse {
+  const [result, setResult] = useState<CustomerTierDiscountResponse>({
+    result: fallback,
     source: 'fallback'
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-
     const evaluateRule = async () => {
-      setIsLoading(true);
-      setError(null);
-
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        setIsLoading(true);
+        
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+        
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'pricing',
-            ruleName: 'customer_tier_discount_pricing',
-            context,
+            context: { customer },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -59,48 +54,30 @@ export function useBrainCustomerTierDiscountPricing(
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.success && data.result) {
-            setResult({
-              discount: data.result.discount ?? fallback.discount,
-              breakdown: data.result.breakdown ?? fallback.breakdown,
-              source: 'brain'
-            });
-          } else {
-            // No match or evaluation failed, use fallback
-            setResult({
-              ...fallback,
-              source: 'fallback'
-            });
-          }
-        }
-      } catch (err) {
-        if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
+        if (data && data.result) {
           setResult({
-            ...fallback,
+            result: data.result,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            result: fallback,
             source: 'fallback'
           });
         }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          result: fallback,
+          source: 'fallback'
+        });
       } finally {
-        if (!isCancelled) {
-          setIsLoading(false);
-        }
+        setIsLoading(false);
       }
     };
 
     evaluateRule();
+  }, [customer.tier, fallback]);
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [context.customer.tier, fallback.discount, fallback.breakdown]);
-
-  return {
-    discount: result.discount,
-    breakdown: result.breakdown,
-    source: result.source,
-    isLoading,
-    error
-  };
+  return result;
 }
