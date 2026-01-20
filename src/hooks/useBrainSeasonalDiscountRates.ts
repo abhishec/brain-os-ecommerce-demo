@@ -1,43 +1,45 @@
 import { useState, useEffect } from 'react';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
-const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
-
 interface SeasonalDiscountRates {
   holiday: number;
   summer_sale: number;
   black_friday: number;
 }
 
-interface BrainSeasonalDiscountRatesResult {
-  rates: SeasonalDiscountRates;
+interface BrainResult {
+  value: SeasonalDiscountRates;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: string | null;
 }
 
-export function useBrainSeasonalDiscountRates(
-  context: { promotion_type?: string },
-  fallback: SeasonalDiscountRates = {
-    holiday: 0.15,
-    summer_sale: 0.1,
-    black_friday: 0.25
-  }
-): BrainSeasonalDiscountRatesResult {
-  const [rates, setRates] = useState<SeasonalDiscountRates>(fallback);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface UseBrainSeasonalDiscountRatesProps {
+  fallback: SeasonalDiscountRates;
+  promotionType?: string;
+}
+
+export const useBrainSeasonalDiscountRates = ({ 
+  fallback, 
+  promotionType 
+}: UseBrainSeasonalDiscountRatesProps): BrainResult => {
+  const [result, setResult] = useState<BrainResult>({
+    value: fallback,
+    source: 'fallback'
+  });
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
+    const evaluateRule = async () => {
+      if (!promotionType) {
+        setResult({ value: fallback, source: 'fallback' });
+        return;
+      }
 
-    const fetchBrainRates = async () => {
+      setIsLoading(true);
+      
       try {
-        setLoading(true);
-        setError(null);
-
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+        
         const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
@@ -45,11 +47,11 @@ export function useBrainSeasonalDiscountRates(
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'pricing',
-            context,
+          body: JSON.stringify({ 
+            domain: 'pricing', 
+            context: { promotion_type: promotionType }, 
             transformer_id: TRANSFORMER_ID,
-            fallback
+            fallback 
           }),
         });
 
@@ -57,39 +59,23 @@ export function useBrainSeasonalDiscountRates(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
-
-        if (isMounted) {
-          if (result && typeof result === 'object' && 
-              typeof result.holiday === 'number' && 
-              typeof result.summer_sale === 'number' && 
-              typeof result.black_friday === 'number') {
-            setRates(result);
-            setSource('brain');
-          } else {
-            setRates(fallback);
-            setSource('fallback');
-          }
+        const data = await response.json();
+        
+        if (data.value && typeof data.value === 'object') {
+          setResult({ value: data.value, source: 'brain' });
+        } else {
+          setResult({ value: fallback, source: 'fallback' });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-          setRates(fallback);
-          setSource('fallback');
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({ value: fallback, source: 'fallback' });
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setIsLoading(false);
       }
     };
 
-    fetchBrainRates();
+    evaluateRule();
+  }, [promotionType, fallback]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [JSON.stringify(context), JSON.stringify(fallback)]);
-
-  return { rates, source, loading, error };
-}
+  return result;
+};
