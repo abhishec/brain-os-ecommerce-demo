@@ -1,77 +1,73 @@
 import { useState, useEffect } from 'react';
 
 interface MaximumDiscountPercentageLimitResult {
-  value: number;
+  maxDiscountPercentage: number;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: string | null;
 }
 
-export function useBrainMaximumDiscountPercentageLimit(
-  fallback: number,
-  requestedDiscountPercentage?: number
-): MaximumDiscountPercentageLimitResult {
+interface MaximumDiscountPercentageLimitContext {
+  requested_discount_percentage?: number;
+}
+
+export const useBrainMaximumDiscountPercentageLimit = (
+  context: MaximumDiscountPercentageLimitContext = {},
+  fallback: number = 0.50
+): MaximumDiscountPercentageLimitResult => {
   const [result, setResult] = useState<MaximumDiscountPercentageLimitResult>({
-    value: fallback,
-    source: 'fallback',
-    loading: false,
-    error: null
+    maxDiscountPercentage: fallback,
+    source: 'fallback'
   });
 
   useEffect(() => {
-    let isCancelled = false;
-
-    async function evaluateRule() {
-      setResult(prev => ({ ...prev, loading: true, error: null }));
-
+    const evaluateRule = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'limits',
-            rule: 'maximum_discount_percentage_limit',
-            context: {
-              requested_discount_percentage: requestedDiscountPercentage
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
-          })
+          }),
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         
-        if (!isCancelled) {
+        if (data && typeof data.maxDiscountPercentage === 'number') {
           setResult({
-            value: data.result !== undefined ? data.result : fallback,
-            source: data.result !== undefined ? 'brain' : 'fallback',
-            loading: false,
-            error: null
+            maxDiscountPercentage: data.maxDiscountPercentage,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            maxDiscountPercentage: fallback,
+            source: 'fallback'
           });
         }
       } catch (error) {
-        if (!isCancelled) {
-          setResult({
-            value: fallback,
-            source: 'fallback',
-            loading: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          });
-        }
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          maxDiscountPercentage: fallback,
+          source: 'fallback'
+        });
       }
-    }
+    };
 
     evaluateRule();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [fallback, requestedDiscountPercentage]);
+  }, [context.requested_discount_percentage, fallback]);
 
   return result;
-}
+};
