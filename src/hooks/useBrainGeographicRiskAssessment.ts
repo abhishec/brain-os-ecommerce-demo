@@ -1,36 +1,37 @@
 import { useState, useEffect } from 'react';
 
-type GeographicRiskResult = {
+interface GeographicRiskResult {
   action: 'REJECT' | 'REVIEW';
   reason: string;
   risk_level: 'BLOCKED' | 'HIGH';
-};
-
-type BrainResult = {
-  result: GeographicRiskResult;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: string | null;
-};
+}
 
-type TransactionContext = {
-  country_code: string;
-};
+interface TransactionContext {
+  transaction: {
+    country_code: string;
+  };
+}
 
-export function useBrainGeographicRiskAssessment(
-  transaction: TransactionContext,
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export const useBrainGeographicRiskAssessment = (
+  context: TransactionContext,
   fallback: GeographicRiskResult
-): BrainResult {
-  const [result, setResult] = useState<GeographicRiskResult>(fallback);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+) => {
+  const [result, setResult] = useState<GeographicRiskResult>({
+    ...fallback,
+    source: 'fallback'
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateRule() {
-      if (!transaction?.country_code) {
+    const evaluateRisk = async () => {
+      if (!context.transaction?.country_code) {
+        setResult({ ...fallback, source: 'fallback' });
         return;
       }
 
@@ -38,17 +39,17 @@ export function useBrainGeographicRiskAssessment(
       setError(null);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'geographic_risk_assessment',
-            context: {
-              transaction
-            },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -59,40 +60,26 @@ export function useBrainGeographicRiskAssessment(
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.result && typeof data.result === 'object') {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            // No match from brain, use fallback
-            setResult(fallback);
-            setSource('fallback');
-          }
+        if (data.result && typeof data.result === 'object') {
+          setResult({
+            action: data.result.action || fallback.action,
+            reason: data.result.reason || fallback.reason,
+            risk_level: data.result.risk_level || fallback.risk_level,
+            source: 'brain'
+          });
+        } else {
+          setResult({ ...fallback, source: 'fallback' });
         }
       } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-          setResult(fallback);
-          setSource('fallback');
-        }
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setResult({ ...fallback, source: 'fallback' });
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    }
-
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
     };
-  }, [transaction.country_code, fallback]);
 
-  return {
-    result,
-    source,
-    loading,
-    error
-  };
-}
+    evaluateRisk();
+  }, [context.transaction?.country_code, fallback]);
+
+  return { result, loading, error };
+};
