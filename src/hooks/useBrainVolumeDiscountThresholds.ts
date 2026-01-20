@@ -1,92 +1,74 @@
 import { useState, useEffect } from 'react';
 
-type VolumeDiscountResult = {
-  volumeThreshold: number;
-  bulkThreshold: number;
+interface VolumeDiscountThresholds {
+  volumeDiscountThreshold: number;
+  bulkOrderThreshold: number;
+}
+
+interface BrainResult {
+  thresholds: VolumeDiscountThresholds;
   source: 'brain' | 'fallback';
-};
+}
 
-type VolumeDiscountFallback = {
-  volumeThreshold: number;
-  bulkThreshold: number;
-};
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainVolumeDiscountThresholds(
-  fallback: VolumeDiscountFallback,
+export const useBrainVolumeDiscountThresholds = (
+  fallback: VolumeDiscountThresholds,
   context?: { order_quantity?: number }
-): VolumeDiscountResult {
-  const [result, setResult] = useState<VolumeDiscountResult>({
-    ...fallback,
+): BrainResult => {
+  const [result, setResult] = useState<BrainResult>({
+    thresholds: fallback,
     source: 'fallback'
   });
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
-    
-    async function evaluateRule() {
-      if (!context?.order_quantity) {
-        // No context provided, use fallback
-        if (isMounted) {
-          setResult({ ...fallback, source: 'fallback' });
-        }
-        return;
-      }
-
-      setIsLoading(true);
-      
+    const evaluateRule = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'pricing',
-            ruleName: 'volume_discount_thresholds',
-            context,
+            context: context || {},
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw new Error('API request failed');
         }
 
         const data = await response.json();
         
-        if (isMounted) {
-          if (data.success && data.result) {
-            // Transform brain result to expected format
-            const brainResult = {
-              volumeThreshold: data.result === 'volume_discount' ? 100 : fallback.volumeThreshold,
-              bulkThreshold: data.result === 'volume_discount' ? 500 : fallback.bulkThreshold,
-              source: 'brain' as const
-            };
-            setResult(brainResult);
-          } else {
-            // Brain returned no match, use fallback
-            setResult({ ...fallback, source: 'fallback' });
-          }
+        if (data && data.thresholds) {
+          setResult({
+            thresholds: data.thresholds,
+            source: 'brain'
+          });
+        } else {
+          setResult({
+            thresholds: fallback,
+            source: 'fallback'
+          });
         }
       } catch (error) {
         console.warn('Brain evaluation failed, using fallback:', error);
-        if (isMounted) {
-          setResult({ ...fallback, source: 'fallback' });
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        setResult({
+          thresholds: fallback,
+          source: 'fallback'
+        });
       }
-    }
+    };
 
     evaluateRule();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [context?.order_quantity, fallback.volumeThreshold, fallback.bulkThreshold]);
+  }, [fallback, context]);
 
   return result;
-}
+};
