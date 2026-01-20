@@ -1,51 +1,54 @@
 import { useState, useEffect } from 'react';
 
-type LoyaltyTierResult = {
+interface LoyaltyTierResult {
   tier: string | null;
   discount: number;
   eligible: boolean;
   threshold: number;
-};
+}
 
-type UseBrainResult = {
-  result: LoyaltyTierResult;
-  loading: boolean;
-  error: Error | null;
+interface BrainLoyaltyTierResult extends LoyaltyTierResult {
   source: 'brain' | 'fallback';
-};
+}
 
-type CustomerContext = {
+interface CustomerContext {
   customer: {
     lifetime_spend: number;
   };
-};
+}
 
 export function useBrainCustomerLoyaltyTierEligibility(
   context: CustomerContext,
   fallback: LoyaltyTierResult
-): UseBrainResult {
-  const [result, setResult] = useState<LoyaltyTierResult>(fallback);
+): BrainLoyaltyTierResult {
+  const [result, setResult] = useState<BrainLoyaltyTierResult>({
+    ...fallback,
+    source: 'fallback'
+  });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    async function evaluate() {
+    const evaluateRule = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'customer_loyalty_tier_eligibility',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -56,34 +59,29 @@ export function useBrainCustomerLoyaltyTierEligibility(
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.result !== undefined && data.result !== null) {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            setResult(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data === 'object' && 'tier' in data) {
+          setResult({
+            tier: data.tier,
+            discount: data.discount || 0,
+            eligible: data.eligible || false,
+            threshold: data.threshold || 0,
+            source: 'brain'
+          });
+        } else {
+          // No valid result from brain, use fallback
+          setResult({ ...fallback, source: 'fallback' });
         }
       } catch (err) {
-        if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setResult(fallback);
-          setSource('fallback');
-        }
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        // Always fall back to original value on error
+        setResult({ ...fallback, source: 'fallback' });
       } finally {
-        if (!isCancelled) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    }
-
-    evaluate();
-
-    return () => {
-      isCancelled = true;
     };
+
+    evaluateRule();
   }, [context.customer.lifetime_spend, fallback]);
 
-  return { result, loading, error, source };
+  return result;
 }
