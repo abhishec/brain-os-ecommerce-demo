@@ -1,68 +1,68 @@
-import { useState, useEffect, useMemo } from 'react';
-import { evaluate } from '@/lib/brain/evaluate';
+import { useState, useEffect } from 'react';
 
-type PromotionalCodeDiscountMap = {
+interface PromotionalCodeDiscountResult {
   [key: string]: number;
-};
+}
 
-type BrainResult = {
-  data: PromotionalCodeDiscountMap;
+interface BrainResult {
+  value: PromotionalCodeDiscountResult;
   source: 'brain' | 'fallback';
-  loading: boolean;
-  error: Error | null;
-};
+}
 
-export function useBrainPromotionalCodeDiscountLookup(
-  fallback: PromotionalCodeDiscountMap
-): BrainResult {
-  const [data, setData] = useState<PromotionalCodeDiscountMap>(fallback);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export const useBrainPromotionalCodeDiscountLookup = (
+  promoCode: string,
+  fallback: PromotionalCodeDiscountResult
+): BrainResult => {
+  const [result, setResult] = useState<BrainResult>({
+    value: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const fetchBrainData = async () => {
+    const fetchBrainResult = async () => {
       try {
-        setLoading(true);
-        setError(null);
-
-        const result = await evaluate({
-          domain: 'pricing',
-          rule: 'promotional_code_discount_lookup',
-          context: {},
-          fallback
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            domain: 'pricing',
+            context: { promo_code: promoCode },
+            transformer_id: TRANSFORMER_ID,
+            fallback
+          }),
         });
 
-        if (isMounted) {
-          if (result && typeof result === 'object' && !Array.isArray(result)) {
-            setData(result as PromotionalCodeDiscountMap);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
+        if (response.ok) {
+          const data = await response.json();
+          if (data && typeof data.value === 'object' && data.value !== null) {
+            setResult({
+              value: data.value,
+              source: 'brain'
+            });
+            return;
           }
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain API failed, using fallback:', error);
       }
+
+      // Always ensure fallback is used if brain fails
+      setResult({
+        value: fallback,
+        source: 'fallback'
+      });
     };
 
-    fetchBrainData();
+    fetchBrainResult();
+  }, [promoCode, fallback]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [fallback]);
-
-  return { data, source, loading, error };
-}
+  return result;
+};
