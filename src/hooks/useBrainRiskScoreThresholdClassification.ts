@@ -1,53 +1,50 @@
 import { useState, useEffect } from 'react';
 
-type RiskClassification = {
-  action: string;
-  risk_level: string;
+interface RiskThresholds {
   low_threshold: number;
-  high_threshold: number;
   medium_threshold: number;
-};
+  high_threshold: number;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
+  action: string;
+}
 
-type RiskClassificationResult = {
-  data: RiskClassification;
+interface UseBrainRiskScoreThresholdClassificationResult {
+  data: RiskThresholds;
   loading: boolean;
-  error: Error | null;
+  error: string | null;
   source: 'brain' | 'fallback';
-};
+}
 
-type UseBrainRiskScoreThresholdClassificationParams = {
-  risk_score: number;
-  fallback: RiskClassification;
-};
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainRiskScoreThresholdClassification({
-  risk_score,
-  fallback
-}: UseBrainRiskScoreThresholdClassificationParams): RiskClassificationResult {
-  const [data, setData] = useState<RiskClassification>(fallback);
+export const useBrainRiskScoreThresholdClassification = (
+  riskScore: number,
+  fallback: RiskThresholds
+): UseBrainRiskScoreThresholdClassificationResult => {
+  const [data, setData] = useState<RiskThresholds>(fallback);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
 
   useEffect(() => {
-    let isMounted = true;
+    const evaluateRiskThresholds = async () => {
+      setLoading(true);
+      setError(null);
 
-    async function evaluateRule() {
       try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'risk_score_threshold_classification',
-            context: {
-              risk_score
-            },
+            context: { risk_score: riskScore },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -58,39 +55,25 @@ export function useBrainRiskScoreThresholdClassification({
 
         const result = await response.json();
         
-        if (isMounted) {
-          if (result.success && result.data) {
-            setData(result.data);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
-          }
-        }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
+        if (result && result.data) {
+          setData(result.data);
+          setSource('brain');
+        } else {
           setData(fallback);
           setSource('fallback');
         }
+      } catch (err) {
+        console.warn('Brain evaluation failed, using fallback:', err);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setData(fallback);
+        setSource('fallback');
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    }
-
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
     };
-  }, [risk_score, fallback]);
 
-  return {
-    data,
-    loading,
-    error,
-    source
-  };
-}
+    evaluateRiskThresholds();
+  }, [riskScore, fallback]);
+
+  return { data, loading, error, source };
+};
