@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-type OverduePaymentResult = {
+interface OverduePaymentPenalty {
   risk_factors: {
     high: string;
     medium: string;
@@ -11,41 +11,60 @@ type OverduePaymentResult = {
     medium: number;
     critical: number;
   };
-};
+}
 
-type UseBrainOverduePaymentResult = {
-  data: OverduePaymentResult;
-  loading: boolean;
-  error: Error | null;
+interface OverduePaymentResult {
+  value: OverduePaymentPenalty | null;
   source: 'brain' | 'fallback';
-};
+  loading: boolean;
+  error: string | null;
+}
+
+interface Profile {
+  daysOverdue: number;
+}
 
 export function useBrainOverduePaymentScoringPenalties(
-  profile: { daysOverdue: number },
-  fallback: OverduePaymentResult
-): UseBrainOverduePaymentResult {
-  const [data, setData] = useState<OverduePaymentResult>(fallback);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  profile: Profile,
+  fallback: OverduePaymentPenalty | null
+): OverduePaymentResult {
+  const [result, setResult] = useState<OverduePaymentResult>({
+    value: fallback,
+    source: 'fallback',
+    loading: false,
+    error: null
+  });
 
   useEffect(() => {
-    let isMounted = true;
+    async function evaluateOverduePaymentPenalties() {
+      if (!profile) {
+        setResult({
+          value: fallback,
+          source: 'fallback',
+          loading: false,
+          error: null
+        });
+        return;
+      }
 
-    async function evaluateRule() {
+      setResult(prev => ({ ...prev, loading: true, error: null }));
+
       try {
-        setLoading(true);
-        setError(null);
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'overdue_payment_scoring_penalties',
             context: { profile },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -54,36 +73,36 @@ export function useBrainOverduePaymentScoringPenalties(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (isMounted) {
-          if (result.success && result.data) {
-            setData(result.data);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
-          }
+        if (data.success && data.result !== undefined) {
+          setResult({
+            value: data.result,
+            source: 'brain',
+            loading: false,
+            error: null
+          });
+        } else {
+          setResult({
+            value: fallback,
+            source: 'fallback',
+            loading: false,
+            error: null
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        setResult({
+          value: fallback,
+          source: 'fallback',
+          loading: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     }
 
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
-    };
+    evaluateOverduePaymentPenalties();
   }, [profile.daysOverdue, fallback]);
 
-  return { data, loading, error, source };
+  return result;
 }
