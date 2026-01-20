@@ -6,46 +6,49 @@ interface CreditCheckResult {
   message: string;
 }
 
-interface UseBrainPremiumCreditEligibilityCheckResult {
+interface BrainResult {
   result: CreditCheckResult | null;
+  source: 'brain' | 'fallback';
   loading: boolean;
   error: string | null;
-  source: 'brain' | 'fallback';
 }
 
-interface UseBrainPremiumCreditEligibilityCheckParams {
-  creditScore: number;
-  fallback: CreditCheckResult | null;
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainPremiumCreditEligibilityCheck({
-  creditScore,
-  fallback
-}: UseBrainPremiumCreditEligibilityCheckParams): UseBrainPremiumCreditEligibilityCheckResult {
+export const useBrainPremiumCreditEligibilityCheck = (
+  creditScore: number,
+  fallback: CreditCheckResult | null
+): BrainResult => {
   const [result, setResult] = useState<CreditCheckResult | null>(fallback);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
 
   useEffect(() => {
-    let mounted = true;
+    const evaluateRule = async () => {
+      if (creditScore === undefined || creditScore === null) {
+        setResult(fallback);
+        setSource('fallback');
+        return;
+      }
 
-    async function evaluate() {
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'premium_credit_eligibility_check',
-            context: {
-              creditScore
-            },
+            context: { creditScore },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -56,39 +59,25 @@ export function useBrainPremiumCreditEligibilityCheck({
 
         const data = await response.json();
         
-        if (mounted) {
-          if (data.success && data.result !== undefined) {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            setResult(fallback);
-            setSource('fallback');
-          }
-        }
-      } catch (err) {
-        if (mounted) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
+        if (data && data.result !== undefined) {
+          setResult(data.result);
+          setSource('brain');
+        } else {
           setResult(fallback);
           setSource('fallback');
         }
+      } catch (err) {
+        console.warn('Brain evaluation failed, using fallback:', err);
+        setResult(fallback);
+        setSource('fallback');
+        setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    }
-
-    evaluate();
-
-    return () => {
-      mounted = false;
     };
+
+    evaluateRule();
   }, [creditScore, fallback]);
 
-  return {
-    result,
-    loading,
-    error,
-    source
-  };
-}
+  return { result, source, loading, error };
+};
