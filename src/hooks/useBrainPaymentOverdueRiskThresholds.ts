@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
 
-type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-
 interface PaymentOverdueRiskThresholds {
-  risk_level: RiskLevel;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   high_risk_threshold: number;
   medium_risk_threshold: number;
   critical_risk_threshold: number;
@@ -11,41 +9,46 @@ interface PaymentOverdueRiskThresholds {
 
 interface PaymentOverdueRiskResult {
   data: PaymentOverdueRiskThresholds;
-  loading: boolean;
-  error: Error | null;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
 interface PaymentOverdueContext {
   days_overdue?: number;
 }
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
 export function useBrainPaymentOverdueRiskThresholds(
-  fallback: PaymentOverdueRiskThresholds,
-  context: PaymentOverdueContext = {}
+  context: PaymentOverdueContext,
+  fallback: PaymentOverdueRiskThresholds
 ): PaymentOverdueRiskResult {
-  const [data, setData] = useState<PaymentOverdueRiskThresholds>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [result, setResult] = useState<PaymentOverdueRiskResult>({
+    data: fallback,
+    source: 'fallback',
+    loading: true,
+    error: null
+  });
 
   useEffect(() => {
     let isCancelled = false;
 
     async function evaluateRule() {
       try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            rule: 'payment_overdue_risk_thresholds',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -54,26 +57,33 @@ export function useBrainPaymentOverdueRiskThresholds(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
-
+        const data = await response.json();
+        
         if (!isCancelled) {
-          if (result.success && result.data) {
-            setData(result.data);
-            setSource('brain');
+          if (data && typeof data === 'object') {
+            setResult({
+              data: data,
+              source: 'brain',
+              loading: false,
+              error: null
+            });
           } else {
-            setData(fallback);
-            setSource('fallback');
+            setResult({
+              data: fallback,
+              source: 'fallback',
+              loading: false,
+              error: null
+            });
           }
         }
-      } catch (err) {
+      } catch (error) {
         if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (!isCancelled) {
-          setLoading(false);
+          setResult({
+            data: fallback,
+            source: 'fallback',
+            loading: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
         }
       }
     }
@@ -83,7 +93,7 @@ export function useBrainPaymentOverdueRiskThresholds(
     return () => {
       isCancelled = true;
     };
-  }, [JSON.stringify(context), JSON.stringify(fallback)]);
+  }, [context.days_overdue, fallback]);
 
-  return { data, loading, error, source };
+  return result;
 }
