@@ -10,39 +10,41 @@ interface TransactionAmountRiskThresholds {
   very_large_transaction_threshold: number;
 }
 
-interface UseBrainTransactionAmountRiskThresholdsResult {
-  data: TransactionAmountRiskThresholds;
-  loading: boolean;
-  error: Error | null;
+interface BrainResult<T> {
+  data: T;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
 export function useBrainTransactionAmountRiskThresholds(
-  fallback: TransactionAmountRiskThresholds,
-  context?: Record<string, any>
-): UseBrainTransactionAmountRiskThresholdsResult {
-  const [data, setData] = useState<TransactionAmountRiskThresholds>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  fallback: TransactionAmountRiskThresholds
+): BrainResult<TransactionAmountRiskThresholds> {
+  const [result, setResult] = useState<BrainResult<TransactionAmountRiskThresholds>>({
+    data: fallback,
+    source: 'fallback',
+    loading: true,
+    error: null,
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function evaluateRule() {
-      setLoading(true);
-      setError(null);
-
+    const fetchBrainRule = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+        
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            rule: 'transaction_amount_risk_thresholds',
-            context: context || {},
+            context: { transaction: { amount: true } },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -51,36 +53,37 @@ export function useBrainTransactionAmountRiskThresholds(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (isMounted) {
-          if (result.success && result.data) {
-            setData(result.data);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
-          }
+        if (data && typeof data === 'object' && data.risk_level && data.large_transaction_threshold !== undefined && data.very_large_transaction_threshold !== undefined) {
+          setResult({
+            data,
+            source: 'brain',
+            loading: false,
+            error: null,
+          });
+        } else {
+          // No valid brain result, use fallback
+          setResult({
+            data: fallback,
+            source: 'fallback',
+            loading: false,
+            error: null,
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        // API failed, use fallback (zero-impact guarantee)
+        setResult({
+          data: fallback,
+          source: 'fallback',
+          loading: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
       }
-    }
-
-    evaluateRule();
-
-    return () => {
-      isMounted = false;
     };
-  }, [fallback, context]);
 
-  return { data, loading, error, source };
+    fetchBrainRule();
+  }, [fallback]);
+
+  return result;
 }
