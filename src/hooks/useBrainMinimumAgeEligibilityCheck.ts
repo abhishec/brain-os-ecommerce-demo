@@ -1,48 +1,60 @@
 import { useState, useEffect } from 'react';
 
 interface AgeEligibilityResult {
-  reason: string;
+  reason?: string;
   eligible: boolean;
-  check_name: string;
+  check_name?: string;
 }
 
-interface UseBrainMinimumAgeEligibilityCheckResult {
-  result: AgeEligibilityResult | null;
-  loading: boolean;
-  error: Error | null;
+interface BrainAgeEligibilityResult {
+  result: AgeEligibilityResult;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
-interface UserContext {
-  age: number;
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
 export function useBrainMinimumAgeEligibilityCheck(
-  user: UserContext,
-  fallback: AgeEligibilityResult | null
-): UseBrainMinimumAgeEligibilityCheckResult {
-  const [result, setResult] = useState<AgeEligibilityResult | null>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  userAge: number,
+  fallback: AgeEligibilityResult = { eligible: true }
+): BrainAgeEligibilityResult {
+  const [result, setResult] = useState<AgeEligibilityResult>(fallback);
   const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
-    const evaluateRule = async () => {
+    async function evaluateAgeEligibility() {
+      if (userAge === undefined || userAge === null) {
+        return;
+      }
+
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const context = {
+          user: {
+            age: userAge
+          }
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'minimum_age_eligibility_check',
-            context: { user },
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -54,8 +66,8 @@ export function useBrainMinimumAgeEligibilityCheck(
         const data = await response.json();
         
         if (isMounted) {
-          if (data.result !== undefined && data.result !== null) {
-            setResult(data.result);
+          if (data && typeof data === 'object') {
+            setResult(data);
             setSource('brain');
           } else {
             setResult(fallback);
@@ -63,24 +75,30 @@ export function useBrainMinimumAgeEligibilityCheck(
           }
         }
       } catch (err) {
+        console.warn('Brain API failed, using fallback:', err);
         if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
           setResult(fallback);
           setSource('fallback');
+          setError(err instanceof Error ? err.message : 'Unknown error');
         }
       } finally {
         if (isMounted) {
           setLoading(false);
         }
       }
-    };
+    }
 
-    evaluateRule();
+    evaluateAgeEligibility();
 
     return () => {
       isMounted = false;
     };
-  }, [user.age, fallback]);
+  }, [userAge, JSON.stringify(fallback)]);
 
-  return { result, loading, error, source };
+  return {
+    result,
+    source,
+    loading,
+    error
+  };
 }
