@@ -1,43 +1,60 @@
 import { useState, useEffect } from 'react';
 
-interface RiskThresholdResult {
+interface FailedPaymentRiskResult {
   action: 'flag_payment' | 'block_payment';
   risk_level: 'high' | 'critical';
   threshold_exceeded: 'MAX_FAILED_PAYMENTS' | 'CRITICAL_FAILED_PAYMENTS';
 }
 
-interface RiskThresholdResponse {
-  result: RiskThresholdResult;
+interface UseBrainFailedPaymentRiskThresholdResult {
+  result: FailedPaymentRiskResult;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
-interface RiskContext {
+interface FailedPaymentContext {
   failed_payment_count: number;
 }
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
 export function useBrainFailedPaymentRiskThreshold(
-  context: RiskContext,
-  fallback: RiskThresholdResult
-): RiskThresholdResponse {
-  const [result, setResult] = useState<RiskThresholdResponse>({
-    result: fallback,
-    source: 'fallback'
-  });
+  context: FailedPaymentContext,
+  fallback: FailedPaymentRiskResult
+): UseBrainFailedPaymentRiskThresholdResult {
+  const [result, setResult] = useState<FailedPaymentRiskResult>(fallback);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const evaluateRule = async () => {
+    let isMounted = true;
+
+    async function evaluateFailedPaymentRisk() {
+      if (!context.failed_payment_count && context.failed_payment_count !== 0) {
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            ruleName: 'failed_payment_risk_threshold',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
-          })
+          }),
         });
 
         if (!response.ok) {
@@ -46,30 +63,40 @@ export function useBrainFailedPaymentRiskThreshold(
 
         const data = await response.json();
         
-        if (data.result && data.matched) {
-          setResult({
-            result: data.result,
-            source: 'brain'
-          });
-        } else {
-          // No match found, use fallback
-          setResult({
-            result: fallback,
-            source: 'fallback'
-          });
+        if (isMounted) {
+          if (data.result && typeof data.result === 'object') {
+            setResult(data.result);
+            setSource('brain');
+          } else {
+            setResult(fallback);
+            setSource('fallback');
+          }
         }
-      } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        // Always fallback on error - zero impact guarantee
-        setResult({
-          result: fallback,
-          source: 'fallback'
-        });
+      } catch (err) {
+        console.warn('Failed payment risk evaluation failed, using fallback:', err);
+        if (isMounted) {
+          setResult(fallback);
+          setSource('fallback');
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
       }
-    };
+    }
 
-    evaluateRule();
+    evaluateFailedPaymentRisk();
+
+    return () => {
+      isMounted = false;
+    };
   }, [context.failed_payment_count, fallback]);
 
-  return result;
+  return {
+    result,
+    source,
+    loading,
+    error
+  };
 }
