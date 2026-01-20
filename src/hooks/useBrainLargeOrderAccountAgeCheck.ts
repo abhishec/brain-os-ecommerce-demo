@@ -6,44 +6,52 @@ interface AccountAgeCheckResult {
   check_name: string;
 }
 
-interface UseBrainLargeOrderAccountAgeCheckResult {
-  data: AccountAgeCheckResult | null;
-  loading: boolean;
-  error: Error | null;
+interface AccountAgeCheckResponse {
+  result: AccountAgeCheckResult | null;
   source: 'brain' | 'fallback';
 }
 
-interface Context {
-  order_total: number;
-  account_age_days: number;
+interface UseBrainLargeOrderAccountAgeCheckParams {
+  orderTotal: number;
+  accountAgeDays: number;
+  fallback: AccountAgeCheckResult | null;
 }
 
-export function useBrainLargeOrderAccountAgeCheck(
-  context: Context,
-  fallback: AccountAgeCheckResult | null
-): UseBrainLargeOrderAccountAgeCheckResult {
-  const [data, setData] = useState<AccountAgeCheckResult | null>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export function useBrainLargeOrderAccountAgeCheck({
+  orderTotal,
+  accountAgeDays,
+  fallback
+}: UseBrainLargeOrderAccountAgeCheckParams): AccountAgeCheckResponse {
+  const [result, setResult] = useState<AccountAgeCheckResponse>({
+    result: fallback,
+    source: 'fallback'
+  });
 
   useEffect(() => {
-    let isCancelled = false;
+    let isMounted = true;
 
     async function evaluateRule() {
-      setLoading(true);
-      setError(null);
-
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const context = {
+          order_total: orderTotal,
+          account_age_days: accountAgeDays
+        };
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'eligibility',
-            ruleName: 'large_order_account_age_check',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -52,26 +60,28 @@ export function useBrainLargeOrderAccountAgeCheck(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (!isCancelled) {
-          if (result.matched && result.data) {
-            setData(result.data);
-            setSource('brain');
+        if (isMounted) {
+          if (data.result !== undefined && data.result !== null) {
+            setResult({
+              result: data.result,
+              source: 'brain'
+            });
           } else {
-            setData(fallback);
-            setSource('fallback');
+            setResult({
+              result: fallback,
+              source: 'fallback'
+            });
           }
         }
-      } catch (err) {
-        if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (!isCancelled) {
-          setLoading(false);
+      } catch (error) {
+        console.warn('Brain evaluation failed, using fallback:', error);
+        if (isMounted) {
+          setResult({
+            result: fallback,
+            source: 'fallback'
+          });
         }
       }
     }
@@ -79,9 +89,9 @@ export function useBrainLargeOrderAccountAgeCheck(
     evaluateRule();
 
     return () => {
-      isCancelled = true;
+      isMounted = false;
     };
-  }, [context.order_total, context.account_age_days, fallback]);
+  }, [orderTotal, accountAgeDays, fallback]);
 
-  return { data, loading, error, source };
+  return result;
 }
