@@ -1,72 +1,95 @@
 import { useState, useEffect } from 'react';
 
-type PromotionType = 'holiday' | 'black_friday' | 'summer_sale';
-type DiscountRates = Record<PromotionType, number>;
-type BrainResult = {
-  discountRates: DiscountRates;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+interface SeasonalDiscountRates {
+  holiday: number;
+  summer_sale: number;
+  black_friday: number;
+}
+
+interface BrainSeasonalDiscountRatesResult {
+  rates: SeasonalDiscountRates;
   source: 'brain' | 'fallback';
   loading: boolean;
-  error?: Error;
-};
+  error: string | null;
+}
 
-export function useBrainSeasonalDiscountRates(fallback: DiscountRates): BrainResult {
-  const [result, setResult] = useState<BrainResult>({
-    discountRates: fallback,
-    source: 'fallback',
-    loading: true,
-    error: undefined
-  });
+export function useBrainSeasonalDiscountRates(
+  context: { promotion_type?: string },
+  fallback: SeasonalDiscountRates = {
+    holiday: 0.15,
+    summer_sale: 0.1,
+    black_friday: 0.25
+  }
+): BrainSeasonalDiscountRatesResult {
+  const [rates, setRates] = useState<SeasonalDiscountRates>(fallback);
+  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
-    async function evaluateDiscountRates() {
+    const fetchBrainRates = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        setLoading(true);
+        setError(null);
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'pricing',
-            rule: 'seasonal_discount_rates',
-            context: {},
+            context,
+            transformer_id: TRANSFORMER_ID,
             fallback
-          })
+          }),
         });
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const data = await response.json();
-        
+        const result = await response.json();
+
         if (isMounted) {
-          setResult({
-            discountRates: data.result || fallback,
-            source: data.result ? 'brain' : 'fallback',
-            loading: false,
-            error: undefined
-          });
+          if (result && typeof result === 'object' && 
+              typeof result.holiday === 'number' && 
+              typeof result.summer_sale === 'number' && 
+              typeof result.black_friday === 'number') {
+            setRates(result);
+            setSource('brain');
+          } else {
+            setRates(fallback);
+            setSource('fallback');
+          }
         }
-      } catch (error) {
+      } catch (err) {
         if (isMounted) {
-          setResult({
-            discountRates: fallback,
-            source: 'fallback',
-            loading: false,
-            error: error instanceof Error ? error : new Error('Unknown error')
-          });
+          setError(err instanceof Error ? err.message : 'Unknown error');
+          setRates(fallback);
+          setSource('fallback');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
         }
       }
-    }
+    };
 
-    evaluateDiscountRates();
+    fetchBrainRates();
 
     return () => {
       isMounted = false;
     };
-  }, [fallback]);
+  }, [JSON.stringify(context), JSON.stringify(fallback)]);
 
-  return result;
+  return { rates, source, loading, error };
 }
