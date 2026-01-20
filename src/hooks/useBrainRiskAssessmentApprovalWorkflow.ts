@@ -6,50 +6,55 @@ interface RiskAssessmentResult {
   next_state: 'risk_team_review' | 'manager_approval' | 'standard_review' | 'auto_approved';
   recommendation: 'decline' | 'review' | 'approve';
   required_actions?: string[];
-}
-
-interface UseBrainRiskAssessmentApprovalWorkflowResult {
-  data: RiskAssessmentResult;
-  loading: boolean;
-  error: Error | null;
   source: 'brain' | 'fallback';
 }
 
-interface RiskAssessmentContext {
-  risk_score: number;
-  [key: string]: any;
+interface UseBrainRiskAssessmentApprovalWorkflowOptions {
+  context: {
+    risk_score: number;
+  };
+  fallback: Omit<RiskAssessmentResult, 'source'>;
+  enabled?: boolean;
 }
 
-export function useBrainRiskAssessmentApprovalWorkflow(
-  context: RiskAssessmentContext,
-  fallback: RiskAssessmentResult
-): UseBrainRiskAssessmentApprovalWorkflowResult {
-  const [data, setData] = useState<RiskAssessmentResult>(fallback);
-  const [loading, setLoading] = useState(false);
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export function useBrainRiskAssessmentApprovalWorkflow({
+  context,
+  fallback,
+  enabled = true
+}: UseBrainRiskAssessmentApprovalWorkflowOptions) {
+  const [result, setResult] = useState<RiskAssessmentResult>({
+    ...fallback,
+    source: 'fallback'
+  });
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
 
   useEffect(() => {
-    if (!context?.risk_score && context?.risk_score !== 0) {
-      setData(fallback);
-      setSource('fallback');
+    if (!enabled || !context?.risk_score) {
+      setResult({ ...fallback, source: 'fallback' });
       return;
     }
 
-    setLoading(true);
-    setError(null);
-
-    const evaluateRule = async () => {
+    const evaluateRiskAssessment = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        setIsLoading(true);
+        setError(null);
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'workflow',
-            ruleName: 'risk_assessment_approval_workflow',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
@@ -58,32 +63,35 @@ export function useBrainRiskAssessmentApprovalWorkflow(
           throw new Error(`API request failed: ${response.status}`);
         }
 
-        const result = await response.json();
+        const data = await response.json();
         
-        if (result.success && result.data) {
-          setData(result.data);
-          setSource('brain');
+        if (data && typeof data === 'object' && data.level) {
+          setResult({
+            level: data.level,
+            assignee: data.assignee,
+            next_state: data.next_state,
+            recommendation: data.recommendation,
+            required_actions: data.required_actions,
+            source: 'brain'
+          });
         } else {
-          setData(fallback);
-          setSource('fallback');
+          setResult({ ...fallback, source: 'fallback' });
         }
       } catch (err) {
-        console.warn('Brain evaluation failed, using fallback:', err);
         setError(err instanceof Error ? err : new Error('Unknown error'));
-        setData(fallback);
-        setSource('fallback');
+        setResult({ ...fallback, source: 'fallback' });
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
-    evaluateRule();
-  }, [context, fallback]);
+    evaluateRiskAssessment();
+  }, [context?.risk_score, enabled, JSON.stringify(fallback)]);
 
   return {
-    data,
-    loading,
+    result,
+    isLoading,
     error,
-    source
+    isBrainResult: result.source === 'brain'
   };
 }
