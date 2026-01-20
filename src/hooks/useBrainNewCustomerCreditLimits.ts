@@ -1,82 +1,90 @@
 import { useState, useEffect } from 'react';
 
-interface CreditLimits {
+interface NewCustomerCreditLimits {
   risk_tier: string;
   auto_approval_limit: number;
   maximum_credit_limit: number;
 }
 
-interface UseBrainNewCustomerCreditLimitsResult {
-  data: CreditLimits;
-  loading: boolean;
-  error: Error | null;
+interface BrainResult<T> {
+  data: T;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
 export function useBrainNewCustomerCreditLimits(
-  fallback: CreditLimits,
-  context?: { customer?: { is_new_customer?: boolean } }
-): UseBrainNewCustomerCreditLimitsResult {
-  const [data, setData] = useState<CreditLimits>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  context: Record<string, any>,
+  fallback: NewCustomerCreditLimits
+): BrainResult<NewCustomerCreditLimits> {
+  const [result, setResult] = useState<BrainResult<NewCustomerCreditLimits>>({
+    data: fallback,
+    source: 'fallback',
+    loading: false,
+    error: null
+  });
 
   useEffect(() => {
-    let isMounted = true;
-    
     const evaluateRule = async () => {
       try {
-        setLoading(true);
-        setError(null);
-        
-        const response = await fetch('/api/brain/evaluate', {
+        setResult(prev => ({ ...prev, loading: true, error: null }));
+
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+        const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({
-            domain: 'eligibility',
-            rule: 'new_customer_credit_limits',
-            context: context || {},
-            fallback
+          body: JSON.stringify({ 
+            domain: 'eligibility', 
+            context, 
+            transformer_id: TRANSFORMER_ID,
+            fallback 
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`API call failed: ${response.status}`);
+          throw new Error(`API request failed: ${response.status}`);
         }
 
-        const result = await response.json();
+        const apiResult = await response.json();
         
-        if (isMounted) {
-          if (result.success && result.data) {
-            setData(result.data);
-            setSource('brain');
-          } else {
-            setData(fallback);
-            setSource('fallback');
-          }
+        if (apiResult && apiResult.risk_tier && 
+            typeof apiResult.auto_approval_limit === 'number' && 
+            typeof apiResult.maximum_credit_limit === 'number') {
+          setResult({
+            data: apiResult,
+            source: 'brain',
+            loading: false,
+            error: null
+          });
+        } else {
+          // No valid match found, use fallback
+          setResult({
+            data: fallback,
+            source: 'fallback',
+            loading: false,
+            error: null
+          });
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
-          setData(fallback);
-          setSource('fallback');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      } catch (error) {
+        // API error, use fallback (zero-impact guarantee)
+        setResult({
+          data: fallback,
+          source: 'fallback',
+          loading: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     };
 
     evaluateRule();
+  }, [context, fallback]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [fallback, context]);
-
-  return { data, loading, error, source };
+  return result;
 }
