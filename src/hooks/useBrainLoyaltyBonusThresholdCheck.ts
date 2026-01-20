@@ -1,70 +1,68 @@
 import { useState, useEffect } from 'react';
 
-interface LoyaltyBonusResult {
+interface LoyaltyBonusConfig {
+  threshold: number;
+  bonus: number;
+}
+
+interface BrainResult {
+  threshold: number;
   bonus: number;
   source: 'brain' | 'fallback';
 }
 
-interface CustomerContext {
-  customer: {
-    order_count: number;
-  };
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainLoyaltyBonusThresholdCheck(
-  context: CustomerContext,
-  fallback: number = 15
-): LoyaltyBonusResult {
-  const [result, setResult] = useState<LoyaltyBonusResult>({
-    bonus: fallback,
+export const useBrainLoyaltyBonusThresholdCheck = (fallback: LoyaltyBonusConfig): BrainResult => {
+  const [result, setResult] = useState<BrainResult>({
+    ...fallback,
     source: 'fallback'
   });
 
   useEffect(() => {
-    const evaluateRule = async () => {
+    const fetchBrainLogic = async () => {
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'risk',
-            rule: 'loyalty_bonus_threshold_check',
-            context,
+            context: {
+              rule_name: 'loyalty_bonus_threshold_check',
+              description: 'Awards 15-point bonus to customers with 10+ orders for loyalty scoring'
+            },
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error('API request failed');
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         
-        if (data.success && data.result !== undefined) {
+        if (data && typeof data.threshold === 'number' && typeof data.bonus === 'number') {
           setResult({
-            bonus: data.result,
+            threshold: data.threshold,
+            bonus: data.bonus,
             source: 'brain'
-          });
-        } else {
-          // No match or evaluation failed - use fallback
-          setResult({
-            bonus: fallback,
-            source: 'fallback'
           });
         }
       } catch (error) {
-        console.warn('Brain evaluation failed, using fallback:', error);
-        setResult({
-          bonus: fallback,
-          source: 'fallback'
-        });
+        console.warn('Brain API failed, using fallback:', error);
+        // Keep fallback value already set in initial state
       }
     };
 
-    evaluateRule();
-  }, [context.customer.order_count, fallback]);
+    fetchBrainLogic();
+  }, [fallback]);
 
   return result;
-}
+};
