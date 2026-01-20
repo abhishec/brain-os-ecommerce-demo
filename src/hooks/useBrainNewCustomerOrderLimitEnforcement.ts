@@ -8,14 +8,14 @@ interface OrderLimitResult {
   escalation_path: string[];
 }
 
-interface UseBrainResult {
+interface BrainResult {
   result: OrderLimitResult | null;
-  loading: boolean;
-  error: Error | null;
   source: 'brain' | 'fallback';
+  loading: boolean;
+  error: string | null;
 }
 
-interface EvaluateContext {
+interface OrderContext {
   customer: {
     is_new_customer: boolean;
   };
@@ -24,70 +24,70 @@ interface EvaluateContext {
   };
 }
 
-export function useBrainNewCustomerOrderLimitEnforcement(
-  context: EvaluateContext,
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
+
+export const useBrainNewCustomerOrderLimitEnforcement = (
+  context: OrderContext,
   fallback: OrderLimitResult | null
-): UseBrainResult {
+): BrainResult => {
   const [result, setResult] = useState<OrderLimitResult | null>(fallback);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
   const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    async function evaluateRule() {
+    const evaluateRule = async () => {
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetch('/api/brain/evaluate', {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
             domain: 'limits',
-            rule: 'new_customer_order_limit_enforcement',
             context,
+            transformer_id: TRANSFORMER_ID,
             fallback
           }),
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw new Error(`API call failed: ${response.status}`);
         }
 
         const data = await response.json();
         
-        if (!isCancelled) {
-          if (data.result !== undefined) {
-            setResult(data.result);
-            setSource('brain');
-          } else {
-            setResult(fallback);
-            setSource('fallback');
-          }
-        }
-      } catch (err) {
-        if (!isCancelled) {
-          setError(err instanceof Error ? err : new Error('Unknown error'));
+        if (data && data.result !== undefined) {
+          setResult(data.result);
+          setSource('brain');
+        } else {
           setResult(fallback);
           setSource('fallback');
         }
+      } catch (err) {
+        console.warn('Brain evaluation failed, using fallback:', err);
+        setResult(fallback);
+        setSource('fallback');
+        setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
-        if (!isCancelled) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    }
+    };
 
     evaluateRule();
-
-    return () => {
-      isCancelled = true;
-    };
   }, [context.customer.is_new_customer, context.order.total, fallback]);
 
-  return { result, loading, error, source };
-}
+  return {
+    result,
+    source,
+    loading,
+    error
+  };
+};
