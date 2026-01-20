@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
-interface RiskDecision {
+interface RiskEvaluationResult {
   reason: string;
   status: string;
   conditions: string[];
@@ -8,87 +8,74 @@ interface RiskDecision {
   escalationPath: string[];
 }
 
-interface RiskDecisionResult {
-  data: RiskDecision | null;
-  loading: boolean;
-  error: string | null;
+interface BrainRiskEvaluationResponse {
+  result: RiskEvaluationResult;
   source: 'brain' | 'fallback';
 }
 
-interface UseBrainCriticalRiskAutoRejectParams {
-  riskLevel: string;
-  fallback: RiskDecision | null;
-  enabled?: boolean;
-}
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://fyknidhqafrhrscnexne.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_9Axs3pBaWTih_u6pCO85rg_dDh8Muf-';
+const TRANSFORMER_ID = 'b2dade50-588c-4de9-8dff-9d30ee5dd81a';
 
-export function useBrainCriticalRiskAutoReject({
-  riskLevel,
-  fallback,
-  enabled = true
-}: UseBrainCriticalRiskAutoRejectParams): RiskDecisionResult {
-  const [data, setData] = useState<RiskDecision | null>(fallback);
-  const [loading, setLoading] = useState(false);
+export const useBrainCriticalRiskAutoReject = () => {
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'brain' | 'fallback'>('fallback');
 
-  useEffect(() => {
-    if (!enabled) {
-      setData(fallback);
-      setSource('fallback');
-      return;
+  const evaluate = useCallback(async (
+    context: { riskLevel: string },
+    fallback: RiskEvaluationResult
+  ): Promise<BrainRiskEvaluationResponse> => {
+    // Start with fallback value for zero-impact
+    if (!context.riskLevel || context.riskLevel !== 'critical') {
+      return { result: fallback, source: 'fallback' };
     }
 
-    const evaluateRule = async () => {
-      setLoading(true);
-      setError(null);
+    setIsLoading(true);
+    setError(null);
 
-      try {
-        const response = await fetch('/api/brain/evaluate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            domain: 'risk',
-            ruleName: 'critical_risk_auto_reject',
-            context: {
-              riskLevel
-            },
-            fallback
-          }),
-        });
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/evaluate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          domain: 'risk',
+          context,
+          transformer_id: TRANSFORMER_ID,
+          fallback
+        }),
+      });
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        
-        if (result.success && result.data !== undefined) {
-          setData(result.data);
-          setSource('brain');
-        } else {
-          // No match from brain logic, use fallback
-          setData(fallback);
-          setSource('fallback');
-        }
-      } catch (err) {
-        // On any error, always fall back to original behavior
-        setError(err instanceof Error ? err.message : 'Unknown error');
-        setData(fallback);
-        setSource('fallback');
-      } finally {
-        setLoading(false);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    };
 
-    evaluateRule();
-  }, [riskLevel, fallback, enabled]);
+      const data = await response.json();
+      
+      if (data.result) {
+        return { result: data.result, source: 'brain' };
+      }
+      
+      // No match found, use fallback
+      return { result: fallback, source: 'fallback' };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      setError(errorMessage);
+      console.warn('Brain evaluation failed, using fallback:', errorMessage);
+      
+      // Always return fallback on error for zero-impact
+      return { result: fallback, source: 'fallback' };
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   return {
-    data,
-    loading,
-    error,
-    source
+    evaluate,
+    isLoading,
+    error
   };
-}
+};
